@@ -129,7 +129,7 @@ Select the original base trace in the shape list → press Clear Trace to delete
 
 Save the remaining S/B trace (Save Selected).
 
-Output:
+#### Output:
 
 Two .nc profile files produced
 
@@ -139,27 +139,40 @@ Diagnostic shapexA.json and shapexB.json saved before G-code generation
 
 ### 10. Circle WorkflowsProfile (+offset)
 Tool runs outside the circle line.
+
 Single .nc file — no tool change needed.
+
 Enter tool offset → click canvas once to place centre.
-Profile Minus (-offset) — Hole Cut
+
+## Profile Minus (-offset) — Hole Cut
 Tool runs inside the circle line.
+
 Single .nc file — no tool change needed.
+
 Enter tool offset → click canvas once to place centre.
-Pocket Minus (-offset)
+
+## Pocket Minus (-offset)
 Tool clears all material inside the circle.
+
 Single .nc file — no tool change needed.
+
 Enter tool offset → click canvas once to place centre.
-Edge Plus (+offset) — Shaped Edge
+
+## Edge Plus (+offset) — Shaped Edge
 Produces two .nc files:
 
 shapexA.nc → Pass 1 (profile / waste removal)
+
 shapexB.nc → Pass 2 (edge / moulding tool)
 
 
 A tool change is required between files.
+
 Diagnostic shapexA.json and shapexB.json saved before G-code generation.
+
 Enter tool offset → click canvas once to place centre.
-Edge Minus (-offset) — Shaped Edge
+
+## Edge Minus (-offset) — Shaped Edge
 Same two-file output as Edge Plus, but with a negative offset.
 A tool change is required between files.
 Diagnostic files saved before G-code generation.
@@ -170,12 +183,16 @@ Enter tool offset → click canvas once to place centre.
 No offset is applied to this shape type. The S/B trace overlays an existing Rtrace or Btrace.
 
 Load the base Rtrace or Btrace (File → Load Shape or Add Shape).
+
 The S/B shape overlays the canvas.
+
 Select the original base trace → press Clear Trace to delete it.
+
 Save the remaining S/B trace (Save Selected).
 
-####Output:
+#### Output:
 Two .nc profile files produced
+
 A tool change is required between files
 
 Diagnostic shapexA.json and shapexB.json saved before G-code generation
@@ -191,7 +208,11 @@ Run it on your grblHAL controller.
 
 ### 12. Controller Setup — RP23CNC
 Download firmware from the grblHAL web builder.
+
 Hold BOOTSEL while plugging the RP23CNC into your computer.
+
 A virtual drive appears on the desktop.
+
 Drag firmware.uf2 onto the drive.
+
 The board flashes automatically.
