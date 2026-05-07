@@ -8,6 +8,7 @@ from tkinter import ttk, filedialog
 from typing import List, Optional
 import math
 import time
+import re
 
 # ------------------------------------------------------------
 # Units and scaling
@@ -200,8 +201,8 @@ class Shape:
         self.id       = id
         self.role     = role
         self.trace    = trace
-        self.workflow = None   # set by workflow dialogs
-        self.offset   = None   # signed offset mm; None = no offset (bulge)
+        self.workflow = None
+        self.offset   = None
 
 
 class EditorState:
@@ -268,14 +269,12 @@ def arc_points(x1, y1, x2, y2, radius, steps=20):
     dx     = x2 - x1
     dy     = y2 - y1
     half_c = math.sqrt(dx*dx + dy*dy) / 2.0
-
-    abs_r = abs(radius)
+    abs_r  = abs(radius)
 
     if half_c < 1e-9 or abs_r < half_c:
         return [(x1, y1), (x2, y2)]
 
-    h = math.sqrt(abs_r * abs_r - half_c * half_c)
-
+    h      = math.sqrt(abs_r * abs_r - half_c * half_c)
     length = math.sqrt(dx*dx + dy*dy)
     perp_x = -dy / length
     perp_y =  dx / length
@@ -301,7 +300,7 @@ def arc_points(x1, y1, x2, y2, radius, steps=20):
 
 
 # ------------------------------------------------------------
-# Hit-testing (standalone helpers)
+# Hit-testing
 # ------------------------------------------------------------
 
 def hit_test_point(state: EditorState, x: float, y: float, threshold=6):
@@ -455,7 +454,8 @@ class MachineSettingsPopup(tk.Toplevel):
                 machine[key] = text
 
         with open(self.job_path, "w") as f:
-            json.dump({"shape": self.shape_data, "machine": machine}, f, indent=4)
+            json.dump({"shape": self.shape_data, "machine": machine},
+                      f, indent=4)
         self.destroy()
 
 
@@ -573,15 +573,9 @@ class SubTypeDialog(tk.Toplevel):
 
 # ------------------------------------------------------------
 # Circle workflow dialog
-# Captures: workflow key  +  signed offset
 # ------------------------------------------------------------
 
 class CircleWorkflowDialog(tk.Toplevel):
-    """
-    Presents the five circle machining workflows and collects
-    the signed tool offset (mm) required for G-code generation.
-    """
-
     WORKFLOWS = [
         ("profile_plus",  "Profile cut   (+offset)  —  single .nc  |  no tool change"),
         ("profile_minus", "Profile cut   (−offset)  —  single .nc  |  no tool change"),
@@ -594,19 +588,16 @@ class CircleWorkflowDialog(tk.Toplevel):
         super().__init__(parent)
         self.title("Circle — Machining Workflow")
         self.resizable(False, False)
-        self.callback  = callback
-        self.wf_var    = tk.StringVar(value="profile_plus")
+        self.callback   = callback
+        self.wf_var     = tk.StringVar(value="profile_plus")
         self.offset_var = tk.StringVar(value="3.0")
 
-        # ── Header ──────────────────────────────────────────────
-        tk.Label(
-            self,
-            text="Select machining workflow for this circle:",
-            font=("Segoe UI", 10, "bold")
-        ).grid(row=0, column=0, columnspan=2,
-               sticky="ew", padx=14, pady=(12, 4))
+        tk.Label(self,
+                 text="Select machining workflow for this circle:",
+                 font=("Segoe UI", 10, "bold")
+                 ).grid(row=0, column=0, columnspan=2,
+                        sticky="ew", padx=14, pady=(12, 4))
 
-        # ── Workflow radio buttons ───────────────────────────────
         for i, (val, label) in enumerate(self.WORKFLOWS):
             fg = "#8B0000" if "TOOL CHANGE" in label else "#003366"
             tk.Radiobutton(
@@ -616,23 +607,18 @@ class CircleWorkflowDialog(tk.Toplevel):
             ).grid(row=1 + i, column=0, columnspan=2,
                    sticky="w", padx=28, pady=2)
 
-        # ── Separator ───────────────────────────────────────────
         ttk.Separator(self, orient="horizontal").grid(
             row=10, column=0, columnspan=2,
             sticky="ew", padx=10, pady=6)
 
-        # ── Offset entry ────────────────────────────────────────
-        tk.Label(
-            self,
-            text="Tool offset (mm):",
-            font=("Segoe UI", 9, "bold")
-        ).grid(row=11, column=0, sticky="w", padx=14, pady=4)
+        tk.Label(self, text="Tool offset (mm):",
+                 font=("Segoe UI", 9, "bold")
+                 ).grid(row=11, column=0, sticky="w", padx=14, pady=4)
 
         self.offset_entry = tk.Entry(
             self, textvariable=self.offset_var, width=10)
         self.offset_entry.grid(row=11, column=1, sticky="w", padx=6, pady=4)
 
-        # ── Offset hint label ────────────────────────────────────
         self.hint_label = tk.Label(
             self, text=self._offset_hint("profile_plus"),
             font=("Segoe UI", 8), fg="#555555",
@@ -640,7 +626,6 @@ class CircleWorkflowDialog(tk.Toplevel):
         self.hint_label.grid(row=12, column=0, columnspan=2,
                              sticky="w", padx=14, pady=(0, 6))
 
-        # ── Info / detail text ───────────────────────────────────
         self.info_text = tk.Text(
             self, width=52, height=9,
             font=("Courier New", 8),
@@ -650,7 +635,6 @@ class CircleWorkflowDialog(tk.Toplevel):
                             padx=10, pady=(0, 6))
         self._update_info("profile_plus")
 
-        # ── Buttons ──────────────────────────────────────────────
         btn_frame = tk.Frame(self)
         btn_frame.grid(row=14, column=0, columnspan=2,
                        pady=(4, 12), padx=10, sticky="e")
@@ -661,8 +645,6 @@ class CircleWorkflowDialog(tk.Toplevel):
 
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._cancel)
-
-    # ── helpers ─────────────────────────────────────────────────
 
     @staticmethod
     def _offset_hint(wf_key):
@@ -706,8 +688,6 @@ class CircleWorkflowDialog(tk.Toplevel):
             return
 
         wf = self.wf_var.get()
-
-        # Apply sign convention
         if wf in ("profile_minus", "pocket_minus", "edge_minus"):
             signed_offset = -offset_val
         else:
@@ -723,15 +703,9 @@ class CircleWorkflowDialog(tk.Toplevel):
 
 # ------------------------------------------------------------
 # Bulge workflow dialog
-# Informational only — no offset collected
 # ------------------------------------------------------------
 
 class BulgeWorkflowDialog(tk.Toplevel):
-    """
-    Displays the bulge edge-shape workflow instructions.
-    No offset is required; the shape overlays the base trace.
-    """
-
     def __init__(self, parent, callback):
         super().__init__(parent)
         self.title("Bulge Edge Shape — Workflow")
@@ -754,12 +728,10 @@ class BulgeWorkflowDialog(tk.Toplevel):
         text_box.config(state="disabled")
         text_box.pack(padx=12, pady=(0, 6))
 
-        note = (
-            "No offset is stored for this shape type.\n"
-            "The S/B trace geometry IS the toolpath."
-        )
         tk.Label(
-            self, text=note,
+            self,
+            text="No offset is stored for this shape type.\n"
+                 "The S/B trace geometry IS the toolpath.",
             font=("Segoe UI", 9, "italic"),
             fg="#555555", justify="left"
         ).pack(padx=16, pady=(0, 6))
@@ -817,6 +789,10 @@ class ShapeEditor:
         self.moulding_click_time   = 0.0
         self.table_mode            = self.MODE_POINTS
 
+        # NC toolpath state
+        self.show_toolpath   = False
+        self.toolpath_points = []   # list of (x, y, is_rapid)
+
         self.trace_type_var   = tk.StringVar(value="")
         self.angle_var        = tk.DoubleVar(value=90.0)
         self.rotate_angle_var = tk.DoubleVar(value=0.0)
@@ -849,7 +825,8 @@ class ShapeEditor:
         self.canvas = tk.Canvas(
             top_frame, bg="white",
             highlightthickness=1, highlightbackground="black")
-        self.canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        self.canvas.pack(side="left", fill="both",
+                         expand=True, padx=5, pady=5)
 
         shapes_frame = tk.Frame(top_frame)
         shapes_frame.pack(side="right", fill="y", padx=5, pady=5)
@@ -897,16 +874,17 @@ class ShapeEditor:
         self.root.config(menu=menubar)
 
         for text, cmd in [
-            ("Delete Point",        self.delete_point),
-            ("Clear Trace",         self.clear_trace),
-            ("New Shape",           self.new_shape),
-            ("Save As...",          self.save),
-            ("Save Selected",       self.save_selected_shape),
-            ("Load Shape...",       self.load),
-            ("Add Shape",           self.load_additional_shape_dialog),
-            ("Join",                self.join),
-            ("Machine Settings",    self.open_machine_settings),
-            ("Generate",            self.generate_gcode_file),
+            ("Delete Point",     self.delete_point),
+            ("Clear Trace",      self.clear_trace),
+            ("New Shape",        self.new_shape),
+            ("Save As...",       self.save),
+            ("Save Selected",    self.save_selected_shape),
+            ("Load Shape...",    self.load),
+            ("Add Shape",        self.load_additional_shape_dialog),
+            ("Join",             self.join),
+            ("Machine Settings", self.open_machine_settings),
+            ("Generate",         self.generate_gcode_file),
+            ("Show NC Path",     self.toggle_nc_toolpath),
         ]:
             tk.Button(bottom_frame, text=text, command=cmd).pack(
                 side="left", padx=5)
@@ -972,20 +950,27 @@ class ShapeEditor:
 
     def _configure_table_columns(self):
         if self.table_mode == self.MODE_POINTS:
-            self.xy_table.column("c0", width=45,  anchor="center", stretch=False)
-            self.xy_table.column("c1", width=80,  anchor="center", stretch=False)
-            self.xy_table.column("c2", width=80,  anchor="center", stretch=False)
-            self.xy_table.column("c3", width=0,   anchor="center", stretch=False,
-                                  minwidth=0)
+            self.xy_table.column("c0", width=45,  anchor="center",
+                                  stretch=False)
+            self.xy_table.column("c1", width=80,  anchor="center",
+                                  stretch=False)
+            self.xy_table.column("c2", width=80,  anchor="center",
+                                  stretch=False)
+            self.xy_table.column("c3", width=0,   anchor="center",
+                                  stretch=False, minwidth=0)
             self.xy_table.heading("c0", text="Ref")
             self.xy_table.heading("c1", text="X")
             self.xy_table.heading("c2", text="Y")
             self.xy_table.heading("c3", text="")
         else:
-            self.xy_table.column("c0", width=55,  anchor="center", stretch=False)
-            self.xy_table.column("c1", width=60,  anchor="center", stretch=False)
-            self.xy_table.column("c2", width=60,  anchor="center", stretch=False)
-            self.xy_table.column("c3", width=75,  anchor="center", stretch=False)
+            self.xy_table.column("c0", width=55,  anchor="center",
+                                  stretch=False)
+            self.xy_table.column("c1", width=60,  anchor="center",
+                                  stretch=False)
+            self.xy_table.column("c2", width=60,  anchor="center",
+                                  stretch=False)
+            self.xy_table.column("c3", width=75,  anchor="center",
+                                  stretch=False)
             self.xy_table.heading("c0", text="Trace")
             self.xy_table.heading("c1", text="From")
             self.xy_table.heading("c2", text="To")
@@ -999,6 +984,123 @@ class ShapeEditor:
         self.table_heading_btn.config(text=self._table_heading_text())
         self._configure_table_columns()
         self.refresh_xy_table()
+
+    # ============================================================
+    # Shape management
+    # ============================================================
+
+    def new_shape(self):
+        new_id     = f"shape_{len(self.state.shapes) + 1}"
+        trace_kind = self.trace_type_var.get() or "R"
+
+        shape = Shape(
+            id=new_id,
+            role="profile",
+            trace=Trace(kind=trace_kind, points=[], closed=False)
+        )
+        self.state.shapes.append(shape)
+        self.current_shape_index  = len(self.state.shapes) - 1
+        self.selected_point_index = None
+        self.dragging             = False
+
+        self.refresh_shapes_list()
+        self.shapes_list.selection_clear(0, "end")
+        self.shapes_list.selection_set(self.current_shape_index)
+        self.shapes_list.activate(self.current_shape_index)
+        self.refresh_xy_table()
+        self.redraw()
+        return shape
+
+    def get_current_shape(self) -> Optional[Shape]:
+        if not self.state.shapes:
+            return None
+        if self.current_shape_index is None:
+            return None
+        if self.current_shape_index >= len(self.state.shapes):
+            return None
+        return self.state.shapes[self.current_shape_index]
+
+    def ensure_trace(self, shape: Shape):
+        if shape.trace is None:
+            shape.trace = Trace(
+                kind=self.trace_type_var.get() or "R",
+                points=[], closed=False)
+        return shape.trace
+
+    def prune_empty_shapes(self):
+        cleaned = []
+        for s in self.state.shapes:
+            if s is None:
+                continue
+            if s.trace is None:
+                s.trace = Trace(kind="R", closed=False, points=[])
+            if not hasattr(s.trace, "points") or s.trace.points is None:
+                s.trace.points = []
+            s.trace._sync_tr()
+            cleaned.append(s)
+        self.state.shapes = cleaned
+
+    def normalize_shape_index(self):
+        if not self.state.shapes:
+            self.current_shape_index = 0
+            return
+        if self.current_shape_index is None:
+            self.current_shape_index = 0
+            return
+        if self.current_shape_index >= len(self.state.shapes):
+            self.current_shape_index = len(self.state.shapes) - 1
+
+    def get_shape_centroid(self, shape):
+        trace = shape.trace
+        if trace is None or not trace.points:
+            return None, None
+        xs = [p.x for p in trace.points]
+        ys = [p.y for p in trace.points]
+        return sum(xs)/len(xs), sum(ys)/len(ys)
+
+    def rotate_shape(self, shape, angle_degrees):
+        cx, cy = self.get_shape_centroid(shape)
+        if cx is None:
+            return
+        angle = math.radians(angle_degrees)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        for p in shape.trace.points:
+            dx, dy = p.x - cx, p.y - cy
+            p.x = cx + dx*cos_a - dy*sin_a
+            p.y = cy + dx*sin_a + dy*cos_a
+
+    def can_merge(self, shape1, shape2):
+        if shape1.role != shape2.role:
+            messagebox.showerror(
+                "Merge Error",
+                f"Cannot merge shapes with different roles:\n"
+                f"{shape1.role} vs {shape2.role}")
+            return False
+        return True
+
+    def validate_shapes_before_save(self):
+        for shape in self.state.shapes:
+            trace = shape.trace
+            if trace is None:
+                continue
+            if shape.role == "hole" and trace.kind == "R":
+                messagebox.showerror(
+                    "Invalid Shape",
+                    f"Shape {shape.id} is red but marked as a hole.")
+                return False
+        return True
+
+    def find_nearest_point(self, wx, wy):
+        hit_radius = 6 / self.view_scale
+        nearest, best = None, None
+        for s in self.state.shapes:
+            if s.trace is None:
+                continue
+            for p in s.trace.points:
+                d = abs(p.x - wx) + abs(p.y - wy)
+                if d < hit_radius and (best is None or d < best):
+                    best, nearest = d, p
+        return nearest
 
     # ============================================================
     # JOIN
@@ -1126,7 +1228,8 @@ class ShapeEditor:
 
         if not self.state.shapes:
             if self.trace_type_var.get() == "":
-                self.show_alert("Select a shape type (R / B / S) before drawing.")
+                self.show_alert(
+                    "Select a shape type (R / B / S) before drawing.")
                 return
             shape = self.new_shape()
         else:
@@ -1175,7 +1278,6 @@ class ShapeEditor:
                 self.redraw()
                 return
 
-            # bulge — no canvas interaction needed here
             return
 
         hit_radius = 6 / self.view_scale
@@ -1336,7 +1438,8 @@ class ShapeEditor:
         wx = self._wx(event.x)
         wy = self._wy(event.y)
         self.view_scale *= factor
-        self.view_offset_x += event.x - (wx * self.view_scale + self.view_offset_x)
+        self.view_offset_x += event.x - \
+            (wx * self.view_scale + self.view_offset_x)
         self.view_offset_y += (self.canvas_height - event.y) - \
                               (wy * self.view_scale + self.view_offset_y)
         self.redraw()
@@ -1393,7 +1496,8 @@ class ShapeEditor:
             seg_index = self.xy_table.index(row_id)
             old_value = self.xy_table.set(row_id, col_id)
             self._inline_edit(row_id, col_id, old_value,
-                          lambda v: self._commit_radius(trace, seg_index, v))
+                              lambda v: self._commit_radius(
+                                  trace, seg_index, v))
             return
 
         if col_id not in ("#2", "#3"):
@@ -1408,7 +1512,8 @@ class ShapeEditor:
 
         old_value = self.xy_table.set(row_id, col_id)
         self._inline_edit(row_id, col_id, old_value,
-                      lambda v: self._commit_xy(trace, point_index, col_id, v))
+                          lambda v: self._commit_xy(
+                              trace, point_index, col_id, v))
 
     def _inline_edit(self, row_id, col_id, old_value, commit_fn):
         entry = tk.Entry(self.xy_table)
@@ -1444,7 +1549,8 @@ class ShapeEditor:
             return
 
         if s == 0:
-            self.show_alert("Apex height must not be zero. Segment kept straight.")
+            self.show_alert(
+                "Apex height must not be zero. Segment kept straight.")
             trace.set_tr(seg_index, None)
             self.refresh_xy_table()
             self.redraw()
@@ -1510,460 +1616,6 @@ class ShapeEditor:
         self.xy_table.see(new_row)
 
     # ============================================================
-    # Shape management
-    # ============================================================
-
-    def new_shape(self):
-        new_id     = f"shape_{len(self.state.shapes) + 1}"
-        trace_kind = self.trace_type_var.get() or "R"
-
-        shape = Shape(
-            id=new_id,
-            role="profile",
-            trace=Trace(kind=trace_kind, points=[], closed=False)
-        )
-        self.state.shapes.append(shape)
-        self.current_shape_index  = len(self.state.shapes) - 1
-        self.selected_point_index = None
-        self.dragging             = False
-
-        self.refresh_shapes_list()
-        self.shapes_list.selection_clear(0, "end")
-        self.shapes_list.selection_set(self.current_shape_index)
-        self.shapes_list.activate(self.current_shape_index)
-        self.refresh_xy_table()
-        self.redraw()
-        return shape
-
-    def get_current_shape(self) -> Optional[Shape]:
-        if not self.state.shapes:
-            return None
-        if self.current_shape_index is None:
-            return None
-        if self.current_shape_index >= len(self.state.shapes):
-            return None
-        return self.state.shapes[self.current_shape_index]
-
-    def ensure_trace(self, shape: Shape):
-        if shape.trace is None:
-            shape.trace = Trace(
-                kind=self.trace_type_var.get() or "R",
-                points=[], closed=False)
-        return shape.trace
-
-    def prune_empty_shapes(self):
-        cleaned = []
-        for s in self.state.shapes:
-            if s is None:
-                continue
-            if s.trace is None:
-                s.trace = Trace(kind="R", closed=False, points=[])
-            if not hasattr(s.trace, "points") or s.trace.points is None:
-                s.trace.points = []
-            s.trace._sync_tr()
-            cleaned.append(s)
-        self.state.shapes = cleaned
-
-    def normalize_shape_index(self):
-        if not self.state.shapes:
-            self.current_shape_index = 0
-            return
-        if self.current_shape_index is None:
-            self.current_shape_index = 0
-            return
-        if self.current_shape_index >= len(self.state.shapes):
-            self.current_shape_index = len(self.state.shapes) - 1
-
-    def get_shape_centroid(self, shape):
-        trace = shape.trace
-        if trace is None or not trace.points:
-            return None, None
-        xs = [p.x for p in trace.points]
-        ys = [p.y for p in trace.points]
-        return sum(xs)/len(xs), sum(ys)/len(ys)
-
-    def rotate_shape(self, shape, angle_degrees):
-        cx, cy = self.get_shape_centroid(shape)
-        if cx is None:
-            return
-        angle = math.radians(angle_degrees)
-        cos_a, sin_a = math.cos(angle), math.sin(angle)
-        for p in shape.trace.points:
-            dx, dy = p.x - cx, p.y - cy
-            p.x = cx + dx*cos_a - dy*sin_a
-            p.y = cy + dx*sin_a + dy*cos_a
-
-    def can_merge(self, shape1, shape2):
-        if shape1.role != shape2.role:
-            messagebox.showerror(
-                "Merge Error",
-                f"Cannot merge shapes with different roles:\n"
-                f"{shape1.role} vs {shape2.role}")
-            return False
-        return True
-
-    def validate_shapes_before_save(self):
-        for shape in self.state.shapes:
-            trace = shape.trace
-            if trace is None:
-                continue
-            if shape.role == "hole" and trace.kind == "R":
-                messagebox.showerror(
-                    "Invalid Shape",
-                    f"Shape {shape.id} is red but marked as a hole.")
-                return False
-        return True
-
-    def find_nearest_point(self, wx, wy):
-        hit_radius = 6 / self.view_scale
-        nearest, best = None, None
-        for s in self.state.shapes:
-            if s.trace is None:
-                continue
-            for p in s.trace.points:
-                d = abs(p.x - wx) + abs(p.y - wy)
-                if d < hit_radius and (best is None or d < best):
-                    best, nearest = d, p
-        return nearest
-
-    # ============================================================
-    # Drawing
-    # ============================================================
-
-    def draw_grid(self):
-        self.canvas.delete("grid")
-        spacing = 10
-        w = self.canvas.winfo_width()
-        h = self.canvas.winfo_height()
-
-        wx0 = self._wx(0)
-        wx1 = self._wx(w)
-        x = int(wx0 // spacing) * spacing
-        while x <= wx1:
-            sx = self._sx(x)
-            self.canvas.create_line(sx, 0, sx, h, fill="#e0e0e0", tags="grid")
-            x += spacing
-
-        wy_bottom = self._wy(h)
-        wy_top    = self._wy(0)
-        y = int(wy_bottom // spacing) * spacing
-        while y <= wy_top:
-            sy = self._sy(y)
-            self.canvas.create_line(0, sy, w, sy, fill="#e0e0e0", tags="grid")
-            y += spacing
-
-    def draw_alert(self, canvas):
-        if not self.alert_visible:
-            return
-        x0, y0 = 10, self.canvas_height - 30
-        x1, y1 = self.canvas_width - 10, self.canvas_height - 10
-        canvas.create_rectangle(x0, y0, x1, y1,
-                                 fill="#ffe9a8", outline="#d4b45f")
-        canvas.create_text(x0 + 10, y0 + 10,
-                           text=self.alert_message, anchor="w",
-                           fill="#5a4a1f",
-                           font=("Segoe UI", 10, "bold"))
-
-    def show_alert(self, message):
-        self.alert_message = message
-        self.alert_visible = True
-        self.redraw()
-
-    def hide_alert(self):
-        self.alert_visible = False
-        self.redraw()
-
-    def _draw_trace_segments(self, pts, trace, color,
-                              closed=False, dash=None):
-        n = len(pts)
-        if n < 2:
-            return
-
-        seg_indices = list(range(n - 1))
-        if closed and n > 1:
-            seg_indices.append(n - 1)
-
-        for seg in seg_indices:
-            p1 = pts[seg]
-            p2 = pts[(seg + 1) % n]
-            r  = trace.get_tr(seg)
-
-            if r is not None:
-                world_pts  = arc_points(p1.x, p1.y, p2.x, p2.y, r)
-                screen_pts = []
-                for wx, wy in world_pts:
-                    screen_pts.extend([self._sx(wx), self._sy(wy)])
-
-                if len(screen_pts) >= 4:
-                    kwargs = dict(fill=color, width=2, smooth=False)
-                    if dash:
-                        kwargs["dash"] = dash
-                    self.canvas.create_line(*screen_pts, **kwargs)
-            else:
-                kwargs = dict(fill=color, width=1)
-                if dash:
-                    kwargs["dash"] = dash
-                self.canvas.create_line(
-                    self._sx(p1.x), self._sy(p1.y),
-                    self._sx(p2.x), self._sy(p2.y),
-                    **kwargs)
-
-    def redraw(self):
-        self.canvas.delete("all")
-        if self.show_grid:
-            self.draw_grid()
-
-        for si, shape in enumerate(self.state.shapes):
-            trace = getattr(shape, "trace", None)
-            if trace is None or not trace.points:
-                continue
-
-            pts   = trace.points
-            color = "blue" if si == self.current_shape_index else "black"
-
-            if trace.kind == "S":
-                sub = getattr(trace, "sub", None)
-
-                if sub == "circle" and len(pts) >= 1:
-                    cx = self._sx(pts[0].x)
-                    cy = self._sy(pts[0].y)
-                    r_world = trace.get_tr(0)
-                    if r_world is not None:
-                        r_px = abs(r_world) * self.view_scale
-                        self.canvas.create_oval(
-                            cx - r_px, cy - r_px,
-                            cx + r_px, cy + r_px,
-                            outline="purple", width=2)
-                        self.canvas.create_text(
-                            cx + 6, cy - 10,
-                            text=f"r={round(abs(r_world), 2)}",
-                            anchor="w", fill="purple",
-                            font=("Segoe UI", 8))
-                        # draw offset ring if offset is stored
-                        off = getattr(shape, "offset", None)
-                        if off is not None:
-                            r_off_px = (abs(r_world) + off) * self.view_scale
-                            if r_off_px > 0:
-                                self.canvas.create_oval(
-                                    cx - r_off_px, cy - r_off_px,
-                                    cx + r_off_px, cy + r_off_px,
-                                    outline="#cc6600",
-                                    width=1, dash=(4, 3))
-                    self.canvas.create_oval(
-                        cx-4, cy-4, cx+4, cy+4, fill="purple")
-                    # workflow label
-                    wf = getattr(shape, "workflow", None)
-                    if wf:
-                        self.canvas.create_text(
-                            cx + 6, cy + 8,
-                            text=wf.replace("_", " "),
-                            anchor="w", fill="#884400",
-                            font=("Segoe UI", 7))
-                    continue
-
-                if sub == "drill" and len(pts) >= 1:
-                    cx = self._sx(pts[0].x)
-                    cy = self._sy(pts[0].y)
-                    sz = 8
-                    self.canvas.create_line(
-                        cx-sz, cy, cx+sz, cy, fill="green", width=2)
-                    self.canvas.create_line(
-                        cx, cy-sz, cx, cy+sz, fill="green", width=2)
-                    self.canvas.create_oval(
-                        cx-3, cy-3, cx+3, cy+3, fill="green")
-                    continue
-
-                if sub == "bulge":
-                    # Bulge is drawn as a dashed magenta overlay
-                    self._draw_trace_segments(
-                        pts, trace, "magenta",
-                        closed=trace.closed, dash=(6, 3))
-                    for p in pts:
-                        sx, sy = self._sx(p.x), self._sy(p.y)
-                        self.canvas.create_oval(
-                            sx-3, sy-3, sx+3, sy+3,
-                            fill="magenta")
-                    continue
-
-                if sub == "moulding":
-                    self._draw_trace_segments(
-                        pts, trace, "orange", closed=False)
-                    for p in pts:
-                        sx, sy = self._sx(p.x), self._sy(p.y)
-                        self.canvas.create_oval(
-                            sx-3, sy-3, sx+3, sy+3, fill="orange")
-                    continue
-
-            if trace.kind == "T":
-                self._draw_trace_segments(
-                    pts, trace, "teal",
-                    closed=trace.closed, dash=(4, 3))
-                for p in pts:
-                    sx, sy = self._sx(p.x), self._sy(p.y)
-                    self.canvas.create_oval(
-                        sx-3, sy-3, sx+3, sy+3, fill="teal")
-                continue
-
-            self._draw_trace_segments(
-                pts, trace, color, closed=trace.closed)
-
-            for p in pts:
-                sx, sy = self._sx(p.x), self._sy(p.y)
-                self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill=color)
-
-        cur_shape = self.get_current_shape()
-        cur_trace = getattr(cur_shape, "trace", None)
-
-        if cur_trace and self.selected_point_index is not None:
-            idx = self.selected_point_index
-            if 0 <= idx < len(cur_trace.points):
-                p  = cur_trace.points[idx]
-                sx, sy = self._sx(p.x), self._sy(p.y)
-                self.canvas.create_oval(
-                    sx-6, sy-6, sx+6, sy+6, outline="red", width=2)
-
-        if cur_trace and cur_trace.points:
-            p  = cur_trace.points[0]
-            sx, sy = self._sx(p.x), self._sy(p.y)
-            self.canvas.create_oval(
-                sx-6, sy-6, sx+6, sy+6, outline="cyan", width=2)
-
-        self.draw_alert(self.canvas)
-
-    # ============================================================
-    # XY / Trace table population
-    # ============================================================
-
-    def refresh_xy_table(self):
-        self.xy_table.delete(*self.xy_table.get_children())
-
-        shape = self.get_current_shape()
-        if not shape or not shape.trace:
-            return
-
-        trace = shape.trace
-        trace._sync_tr()
-
-        if trace.kind == "S":
-            sub = getattr(trace, "sub", None)
-            if sub == "moulding" and self.table_mode == self.MODE_TRACES:
-                self._populate_trace_table(trace)
-                return
-            self._populate_special_table(trace, shape)
-            return
-
-        if self.table_mode == self.MODE_POINTS:
-            self._populate_point_table(trace)
-        else:
-            self._populate_trace_table(trace)
-
-    def _populate_special_table(self, trace, shape=None):
-        sub = getattr(trace, "sub", "?")
-
-        if sub == "circle":
-            if trace.points:
-                p = trace.points[0]
-                r = trace.get_tr(0)
-            else:
-                p = None
-                r = getattr(trace, "_pending_radius", None)
-
-            r_display  = round(abs(r), 3) if r is not None else "?"
-            x_display  = round(p.x, 3)   if p else "—"
-            y_display  = round(p.y, 3)   if p else "—"
-
-            self.xy_table.insert("", "end", iid="0",
-                values=("Centre", x_display, y_display, r_display))
-
-            # Workflow / offset summary row
-            if shape is not None:
-                wf  = getattr(shape, "workflow", None) or "—"
-                off = getattr(shape, "offset",   None)
-                off_str = f"{off:+.3f}" if off is not None else "—"
-                self.xy_table.insert("", "end", iid="wf",
-                    values=("Workflow", wf.replace("_", " "), "Offset", off_str))
-
-        elif sub == "drill":
-            if trace.points:
-                p = trace.points[0]
-                self.xy_table.insert("", "end", iid="0",
-                    values=("Drill", round(p.x, 3), round(p.y, 3), "—"))
-            else:
-                self.xy_table.insert("", "end", iid="0",
-                    values=("Drill", "—", "—", "—"))
-
-        elif sub == "bulge":
-            # Show all points; offset is N/A
-            for i, p in enumerate(trace.points):
-                self.xy_table.insert("", "end", iid=str(i),
-                    values=(f"P{i}", round(p.x, 3), round(p.y, 3), "bulge"))
-
-        elif sub == "moulding":
-            for i, p in enumerate(trace.points):
-                self.xy_table.insert("", "end", iid=str(i),
-                    values=(f"P{i}", round(p.x, 3), round(p.y, 3), ""))
-
-    def _populate_point_table(self, trace):
-        for i, p in enumerate(trace.points):
-            self.xy_table.insert(
-                "", "end", iid=str(i),
-                values=(f"P{i}", round(p.x, 3), round(p.y, 3), ""))
-
-    def _populate_trace_table(self, trace):
-        pts = trace.points
-        n   = len(pts)
-        if n < 2:
-            return
-
-        num_seg = trace.num_segments
-
-        for seg in range(num_seg):
-            p_from = seg
-            p_to   = (seg + 1) % n
-
-            r = trace.get_tr(seg)
-
-            if r is not None:
-                abs_r = abs(r)
-                p1    = pts[p_from]
-                p2    = pts[p_to]
-                c     = chord_length(p1, p2)
-                h     = c / 2.0
-                if abs_r >= h:
-                    sagitta  = abs_r - math.sqrt(abs_r * abs_r - h * h)
-                    apex_str = str(round(sagitta, 4))
-                else:
-                    apex_str = ""
-            else:
-                apex_str = ""
-
-            tag = "open_seg" if not trace.closed else ""
-
-            self.xy_table.insert(
-                "", "end", iid=str(seg),
-                values=(f"tr{seg}", f"P{p_from}", f"P{p_to}", apex_str),
-                tags=(tag,))
-
-        self.xy_table.tag_configure("open_seg", foreground="#999999")
-
-    def update_xy_table(self):
-        self.refresh_xy_table()
-
-        if self.selected_point_index is None:
-            return
-
-        table = self.xy_table
-        rows  = table.get_children()
-        if not rows:
-            return
-
-        idx = self.selected_point_index
-        if 0 <= idx < len(rows):
-            row_id = rows[idx]
-            table.selection_set(row_id)
-            table.see(row_id)
-
-    # ============================================================
     # Shapes list
     # ============================================================
 
@@ -1992,9 +1644,7 @@ class ShapeEditor:
 
         self.update_rotate_angle_state()
         self.update_arc_angle_state()
-
         self.moulding_click_time = 0.0
-
         self.refresh_xy_table()
         self.redraw()
 
@@ -2005,21 +1655,14 @@ class ShapeEditor:
     def on_trace_type_changed(self, *args):
         if self._suppress_type_change:
             return
-
         new_kind = self.trace_type_var.get()
-
         if new_kind == "":
             self.angle_entry.config(state="disabled")
             return
-
         self.angle_entry.config(state="disabled")
         SubTypeDialog(self.root, new_kind, callback=self._apply_subtype)
 
     def _apply_subtype(self, kind, sub, radius):
-        """
-        Called by SubTypeDialog.  For S/circle and S/bulge the workflow
-        dialogs are chained before the shape is finalised.
-        """
         if kind is None:
             self._suppress_type_change = True
             self.trace_type_var.set("")
@@ -2031,33 +1674,27 @@ class ShapeEditor:
         else:
             role = "special"
 
-        # ── S / circle → open workflow dialog before adding shape ──
         if kind == "S" and sub == "circle":
             CircleWorkflowDialog(
                 self.root,
                 callback=lambda wf, off: self._finalise_circle(
-                    wf, off, radius)
-            )
+                    wf, off, radius))
             self._suppress_type_change = True
             self.trace_type_var.set("")
             self._suppress_type_change = False
             return
 
-        # ── S / bulge → open bulge workflow dialog ──────────────
         if kind == "S" and sub == "bulge":
             BulgeWorkflowDialog(
                 self.root,
-                callback=lambda ok: self._finalise_bulge(ok)
-            )
+                callback=lambda ok: self._finalise_bulge(ok))
             self._suppress_type_change = True
             self.trace_type_var.set("")
             self._suppress_type_change = False
             return
 
-        # ── All other sub-types ──────────────────────────────────
         trace = Trace(kind=kind, points=[], closed=False,
                       sub=(sub if kind == "S" else None))
-
         self.moulding_click_time = 0.0
 
         new_id = f"shape_{len(self.state.shapes) + 1}"
@@ -2074,12 +1711,12 @@ class ShapeEditor:
         self.redraw()
 
         hints = {
-            ("R", "profile"): "R-Profile ready — click to add points.  Right-click to close.",
-            ("R", "pocket"):  "R-Pocket ready — click to add points.  Right-click to close.",
-            ("B", "profile"): "B-Profile ready — click to add points.  Right-click to close.",
-            ("B", "pocket"):  "B-Pocket ready — click to add points.  Right-click to close.",
-            ("S", "drill"):   "Click canvas ONCE to place drill point.",
-            ("S", "moulding"):"Click canvas to add moulding profile points.",
+            ("R", "profile"):  "R-Profile ready — click to add points.  Right-click to close.",
+            ("R", "pocket"):   "R-Pocket ready — click to add points.  Right-click to close.",
+            ("B", "profile"):  "B-Profile ready — click to add points.  Right-click to close.",
+            ("B", "pocket"):   "B-Pocket ready — click to add points.  Right-click to close.",
+            ("S", "drill"):    "Click canvas ONCE to place drill point.",
+            ("S", "moulding"): "Click canvas to add moulding profile points.",
         }
         self.show_alert(hints.get((kind, sub), "Shape ready."))
 
@@ -2088,15 +1725,10 @@ class ShapeEditor:
         self._suppress_type_change = False
 
     # ============================================================
-    # Circle workflow finalisation
+    # Circle / Bulge finalisation
     # ============================================================
 
     def _finalise_circle(self, wf_key, signed_offset, radius):
-        """
-        Called after CircleWorkflowDialog confirms.
-        Creates the S/circle shape with workflow and offset stored,
-        then triggers diagnostic saves for two-pass workflows.
-        """
         if wf_key is None:
             self.show_alert("Circle workflow cancelled.")
             return
@@ -2122,7 +1754,6 @@ class ShapeEditor:
         self.refresh_xy_table()
         self.redraw()
 
-        # ── Two-pass workflows → offer diagnostic saves ──────────
         if wf_key in ("edge_plus", "edge_minus"):
             self._offer_diagnostic_saves(shape)
         else:
@@ -2131,15 +1762,7 @@ class ShapeEditor:
                 f"Circle ({wf_key.replace('_', ' ')})  offset={sign_str}"
                 "  — click canvas once to place centre.")
 
-    # ============================================================
-    # Bulge workflow finalisation
-    # ============================================================
-
     def _finalise_bulge(self, confirmed):
-        """
-        Called after BulgeWorkflowDialog.  Creates the S/bulge shape.
-        The user then loads the base trace and deletes it after overlay.
-        """
         if not confirmed:
             self.show_alert("Bulge workflow cancelled.")
             return
@@ -2148,7 +1771,7 @@ class ShapeEditor:
         new_id = f"shape_{len(self.state.shapes) + 1}"
         shape  = Shape(id=new_id, role="special", trace=trace)
         shape.workflow = "bulge"
-        shape.offset   = None   # no offset for bulge
+        shape.offset   = None
 
         self.state.shapes.append(shape)
         self.current_shape_index  = len(self.state.shapes) - 1
@@ -2161,19 +1784,13 @@ class ShapeEditor:
         self.shapes_list.activate(self.current_shape_index)
         self.refresh_xy_table()
         self.redraw()
-
-        # Offer diagnostic saves immediately
         self._offer_diagnostic_saves(shape)
 
     # ============================================================
-    # Diagnostic saves  (shapexA / shapexB)
+    # Diagnostic saves
     # ============================================================
 
     def _offer_diagnostic_saves(self, shape):
-        """
-        For two-process workflows, prompt the user to save
-        shapexA.json and shapexB.json for pre-generation inspection.
-        """
         wf = getattr(shape, "workflow", "")
         ans = messagebox.askyesno(
             "Save Diagnostic Files?",
@@ -2190,48 +1807,29 @@ class ShapeEditor:
                 f"{wf.replace('_', ' ')} ready — "
                 "place geometry then use Save Selected for each pass.")
             return
-
         self._write_diagnostic_json(shape)
 
     def _write_diagnostic_json(self, shape):
-        """
-        Writes shapexA.json (Pass 1) and shapexB.json (Pass 2).
-        Both currently contain the same geometry; the generator
-        will apply the correct offset sign for each pass.
-        """
         t_data = self._serialise_trace(shape.trace) \
                  if shape.trace is not None else None
+        off = getattr(shape, "offset",   None)
+        wf  = getattr(shape, "workflow", None)
 
-        off    = getattr(shape, "offset",   None)
-        wf     = getattr(shape, "workflow", None)
+        out_a = {"shapes": [{"id":       shape.id + "_A",
+                              "role":     shape.role,
+                              "workflow": wf,
+                              "offset":   off,
+                              "pass":     "A",
+                              "trace":    t_data}]}
+        out_b = {"shapes": [{"id":       shape.id + "_B",
+                              "role":     shape.role,
+                              "workflow": wf,
+                              "offset":   off,
+                              "pass":     "B",
+                              "trace":    t_data}]}
 
-        # Pass A — as-drawn geometry + workflow metadata
-        out_a = {
-            "shapes": [{
-                "id":       shape.id + "_A",
-                "role":     shape.role,
-                "workflow": wf,
-                "offset":   off,
-                "pass":     "A",
-                "trace":    t_data,
-            }]
-        }
-
-        # Pass B — same geometry, flagged as second pass
-        out_b = {
-            "shapes": [{
-                "id":       shape.id + "_B",
-                "role":     shape.role,
-                "workflow": wf,
-                "offset":   off,
-                "pass":     "B",
-                "trace":    t_data,
-            }]
-        }
-
-        saved = []
+        saved  = []
         errors = []
-
         for filename, payload in [("shapexA.json", out_a),
                                    ("shapexB.json", out_b)]:
             try:
@@ -2242,16 +1840,15 @@ class ShapeEditor:
                 errors.append(f"{filename}: {exc}")
 
         if errors:
-            messagebox.showerror(
-                "Diagnostic Save Error",
-                "Could not write:\n" + "\n".join(errors))
+            messagebox.showerror("Diagnostic Save Error",
+                                 "Could not write:\n" + "\n".join(errors))
         else:
             self.show_alert(
                 f"Diagnostic files saved: {', '.join(saved)}  "
                 "— place geometry then generate G-code.")
 
     # ============================================================
-    # Callbacks (misc)
+    # Misc callbacks
     # ============================================================
 
     def on_rotate_enter(self, event):
@@ -2270,7 +1867,8 @@ class ShapeEditor:
         self.angle_entry.config(state="disabled")
 
     def update_rotate_angle_state(self):
-        state = "normal" if self.get_current_shape() is not None else "disabled"
+        state = "normal" if self.get_current_shape() is not None \
+                else "disabled"
         self.rotate_angle_entry.config(state=state)
 
     # ============================================================
@@ -2371,15 +1969,14 @@ class ShapeEditor:
         self.state.shapes.clear()
         stem = os.path.splitext(os.path.basename(path))[0]
 
-        shapes_data = data.get("shapes", [])
-        for i, s in enumerate(shapes_data):
-            t = s.get("trace")
+        for i, s in enumerate(data.get("shapes", [])):
+            t     = s.get("trace")
             trace = self._deserialise_trace(t) if t else \
                     Trace(kind="R", closed=False, points=[])
             shape_id = stem if i == 0 else f"{stem}_{i+1}"
-            shape = Shape(
-                id=shape_id, role=s.get("role", "profile"), trace=trace)
-            # Restore workflow / offset if present
+            shape = Shape(id=shape_id,
+                          role=s.get("role", "profile"),
+                          trace=trace)
             shape.workflow = s.get("workflow", None)
             shape.offset   = s.get("offset",   None)
             self.state.shapes.append(shape)
@@ -2422,28 +2019,26 @@ class ShapeEditor:
                 "Click a shape in the list first.")
             return
 
-        initial = f"{shape.id}.json"
         path = filedialog.asksaveasfilename(
             title="Save Selected Shape",
-            initialfile=initial,
+            initialfile=f"{shape.id}.json",
             defaultextension=".json",
             filetypes=[("JSON Files", "*.json")])
         if not path:
             return
 
-        t   = None if shape.trace is None else self._serialise_trace(shape.trace)
-        out = {"shapes": [{
-            "id":       shape.id,
-            "role":     shape.role,
-            "workflow": getattr(shape, "workflow", None),
-            "offset":   getattr(shape, "offset",   None),
-            "trace":    t,
-        }]}
+        t   = None if shape.trace is None \
+              else self._serialise_trace(shape.trace)
+        out = {"shapes": [{"id":       shape.id,
+                            "role":     shape.role,
+                            "workflow": getattr(shape, "workflow", None),
+                            "offset":   getattr(shape, "offset",   None),
+                            "trace":    t}]}
 
         with open(path, "w") as f:
             json.dump(out, f, indent=2)
-
-        self.show_alert(f"Saved selected shape → {os.path.basename(path)}")
+        self.show_alert(
+            f"Saved selected shape → {os.path.basename(path)}")
 
     def save_job(self):
         out = {"shapes": []}
@@ -2476,9 +2071,8 @@ class ShapeEditor:
         stem         = os.path.splitext(os.path.basename(path))[0]
         existing_ids = {s.id for s in self.state.shapes}
 
-        shapes_data = data.get("shapes", [])
-        for i, s in enumerate(shapes_data):
-            t = s.get("trace")
+        for i, s in enumerate(data.get("shapes", [])):
+            t     = s.get("trace")
             trace = self._deserialise_trace(t) if t else None
 
             candidate = stem if i == 0 else f"{stem}_{i+1}"
@@ -2488,10 +2082,9 @@ class ShapeEditor:
                 suffix += 1
                 unique  = f"{candidate}_{suffix}"
 
-            shape = Shape(
-                id    = unique,
-                role  = s.get("role", "profile"),
-                trace = trace)
+            shape = Shape(id=unique,
+                          role=s.get("role", "profile"),
+                          trace=trace)
             shape.workflow = s.get("workflow", None)
             shape.offset   = s.get("offset",   None)
             existing_ids.add(unique)
@@ -2548,11 +2141,588 @@ class ShapeEditor:
 
             with open(out_path, "w") as f:
                 f.write(gcode)
-
             self.show_alert(
                 f"G-code generated → {os.path.basename(out_path)}")
         except Exception as e:
             messagebox.showerror("Generator Error", str(e))
+
+    # ============================================================
+    # NC Toolpath Visualization
+    # ============================================================
+
+    def toggle_nc_toolpath(self):
+        """
+        Toggle the NC toolpath overlay on/off.
+        If no .nc file has been loaded yet, prompt the user to pick one.
+        """
+        if not self.show_toolpath:
+            if not self.toolpath_points:
+                self.load_nc_file()
+                if not self.toolpath_points:
+                    return
+            self.show_toolpath = True
+            self.show_alert(
+                "NC toolpath overlay ON  —  click 'Show NC Path' to hide.")
+        else:
+            self.show_toolpath = False
+            self.show_alert("NC toolpath overlay OFF.")
+        self.redraw()
+
+    def load_nc_file(self):
+        """
+        Ask the user to pick a .nc / G-code file, parse it, and
+        store the resulting move list in self.toolpath_points.
+        Each entry is (x_mm, y_mm, is_rapid) where is_rapid is
+        True for G0 moves and False for G1/G2/G3 cutting moves.
+        """
+        path = filedialog.askopenfilename(
+            title="Load NC / G-code File",
+            filetypes=[("NC Files",     "*.nc"),
+                       ("G-code Files", "*.gcode *.nc *.tap"),
+                       ("All Files",    "*.*")])
+        if not path:
+            return
+
+        try:
+            points = self._parse_nc_file(path)
+        except Exception as e:
+            messagebox.showerror("NC Parse Error",
+                                 f"Could not parse NC file:\n{e}")
+            return
+
+        if not points:
+            messagebox.showwarning(
+                "NC File Empty",
+                "No G0/G1/G2/G3 moves found in the file.")
+            return
+
+        self.toolpath_points = points
+        self.show_alert(
+            f"NC file loaded: {os.path.basename(path)}  "
+            f"({len(points)} moves)")
+
+    def _parse_nc_file(self, path):
+        """
+        Minimal G-code parser.
+        Handles G0, G1 (linear), G2, G3 (arc) moves.
+        Returns a list of (x, y, is_rapid) tuples representing
+        the tool centre path projected onto the XY plane.
+        Arc moves (G2/G3) are approximated as polylines.
+        """
+        points   = []
+        cx = cy  = 0.0
+        modal    = 0        # 0=rapid, 1=feed, 2=cw arc, 3=ccw arc
+
+        token_re = re.compile(r'([A-Za-z])([-+]?\d*\.?\d+)')
+
+        def get_val(tokens, letter, default=None):
+            return tokens.get(letter.upper(), default)
+
+        with open(path, "r", errors="replace") as f:
+            for raw_line in f:
+                line = raw_line.split(";")[0].split(
+                    "(")[0].strip().upper()
+                if not line:
+                    continue
+
+                tokens = {m.group(1): float(m.group(2))
+                          for m in token_re.finditer(line)}
+
+                if "G" in tokens:
+                    g = int(tokens["G"])
+                    if g in (0, 1, 2, 3):
+                        modal = g
+
+                has_xy = "X" in tokens or "Y" in tokens
+                if not has_xy:
+                    continue
+
+                nx = get_val(tokens, "X", cx)
+                ny = get_val(tokens, "Y", cy)
+
+                if modal in (0, 1):
+                    is_rapid = (modal == 0)
+                    points.append((nx, ny, is_rapid))
+                    cx, cy = nx, ny
+
+                elif modal in (2, 3):
+                    i_off    = get_val(tokens, "I", 0.0)
+                    j_off    = get_val(tokens, "J", 0.0)
+                    arc_pts  = self._arc_move_points(
+                        cx, cy, nx, ny, i_off, j_off,
+                        clockwise=(modal == 2))
+                    for px, py in arc_pts:
+                        points.append((px, py, False))
+                    cx, cy = nx, ny
+
+        return points
+
+    def _arc_move_points(self, x1, y1, x2, y2,
+                         i_off, j_off, clockwise, steps=24):
+        """
+        Convert a G2/G3 arc move to a list of (x, y) polyline points.
+        Centre is at (x1+i_off, y1+j_off).
+        """
+        ocx = x1 + i_off
+        ocy = y1 + j_off
+
+        r       = math.sqrt((x1 - ocx)**2 + (y1 - ocy)**2)
+        a_start = math.atan2(y1 - ocy, x1 - ocx)
+        a_end   = math.atan2(y2 - ocy, x2 - ocx)
+
+        if clockwise:
+            if a_end >= a_start:
+                a_end -= 2 * math.pi
+        else:
+            if a_end <= a_start:
+                a_end += 2 * math.pi
+
+        pts = []
+        for i in range(1, steps + 1):
+            t = i / steps
+            a = a_start + t * (a_end - a_start)
+            pts.append((ocx + r * math.cos(a),
+                        ocy + r * math.sin(a)))
+        return pts
+
+    def draw_nc_toolpath(self):
+        """
+        Draw the loaded NC toolpath onto the canvas.
+        Rapid moves  (G0) → thin red dashed line
+        Feed moves   (G1/G2/G3) → solid green line  width=2
+        Start marker → blue circle
+        End marker   → red filled circle
+        """
+        pts = self.toolpath_points
+        if not pts:
+            return
+
+        # Start marker
+        sx0 = self._sx(pts[0][0])
+        sy0 = self._sy(pts[0][1])
+        self.canvas.create_oval(sx0-6, sy0-6, sx0+6, sy0+6,
+                                outline="blue", width=2,
+                                tags="nc_toolpath")
+        self.canvas.create_text(sx0 + 8, sy0,
+                                text="START", anchor="w",
+                                fill="blue",
+                                font=("Segoe UI", 7),
+                                tags="nc_toolpath")
+
+        prev_x, prev_y, _ = pts[0]
+        for (nx, ny, is_rapid) in pts[1:]:
+            sx1 = self._sx(prev_x)
+            sy1 = self._sy(prev_y)
+            sx2 = self._sx(nx)
+            sy2 = self._sy(ny)
+
+            if is_rapid:
+                self.canvas.create_line(
+                    sx1, sy1, sx2, sy2,
+                    fill="red", width=1, dash=(4, 4),
+                    tags="nc_toolpath")
+            else:
+                self.canvas.create_line(
+                    sx1, sy1, sx2, sy2,
+                    fill="#00aa00", width=2,
+                    tags="nc_toolpath")
+
+            prev_x, prev_y = nx, ny
+
+        # End marker
+        sxe = self._sx(prev_x)
+        sye = self._sy(prev_y)
+        self.canvas.create_oval(sxe-5, sye-5, sxe+5, sye+5,
+                                fill="red",
+                                tags="nc_toolpath")
+        self.canvas.create_text(sxe + 8, sye,
+                                text="END", anchor="w",
+                                fill="red",
+                                font=("Segoe UI", 7),
+                                tags="nc_toolpath")
+
+    def draw_nc_legend(self):
+        """
+        Draw a small legend in the top-left corner explaining
+        the NC toolpath colours.
+        """
+        x0, y0 = 12, 12
+        self.canvas.create_rectangle(
+            x0, y0, x0+150, y0+50,
+            fill="#ffffff", outline="#aaaaaa",
+            tags="nc_toolpath")
+        self.canvas.create_line(
+            x0+6,  y0+16, x0+26, y0+16,
+            fill="#00aa00", width=2,
+            tags="nc_toolpath")
+        self.canvas.create_text(
+            x0+30, y0+16,
+            text="Feed move (G1/G2/G3)",
+            anchor="w", font=("Segoe UI", 7),
+            tags="nc_toolpath")
+        self.canvas.create_line(
+            x0+6,  y0+34, x0+26, y0+34,
+            fill="red", width=1, dash=(4, 4),
+            tags="nc_toolpath")
+        self.canvas.create_text(
+            x0+30, y0+34,
+            text="Rapid move (G0)",
+            anchor="w", font=("Segoe UI", 7),
+            tags="nc_toolpath")
+
+    # ============================================================
+    # Drawing helpers
+    # ============================================================
+
+    def draw_grid(self):
+        spacing = 10
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+
+        wx0 = self._wx(0)
+        wx1 = self._wx(w)
+        x   = int(wx0 // spacing) * spacing
+        while x <= wx1:
+            sx = self._sx(x)
+            self.canvas.create_line(sx, 0, sx, h,
+                                    fill="#e0e0e0", tags="grid")
+            x += spacing
+
+        wy_bottom = self._wy(h)
+        wy_top    = self._wy(0)
+        y         = int(wy_bottom // spacing) * spacing
+        while y <= wy_top:
+            sy = self._sy(y)
+            self.canvas.create_line(0, sy, w, sy,
+                                    fill="#e0e0e0", tags="grid")
+            y += spacing
+
+    def draw_alert(self, canvas):
+        if not self.alert_visible:
+            return
+        x0 = 10
+        y0 = self.canvas_height - 30
+        x1 = self.canvas_width  - 10
+        y1 = self.canvas_height - 10
+        canvas.create_rectangle(x0, y0, x1, y1,
+                                 fill="#ffe9a8", outline="#d4b45f")
+        canvas.create_text(x0 + 10, y0 + 10,
+                           text=self.alert_message,
+                           anchor="w", fill="#5a4a1f",
+                           font=("Segoe UI", 10, "bold"))
+
+    def show_alert(self, message):
+        self.alert_message = message
+        self.alert_visible = True
+        self.redraw()
+
+    def hide_alert(self):
+        self.alert_visible = False
+        self.redraw()
+
+    def _draw_trace_segments(self, pts, trace, color,
+                              closed=False, dash=None):
+        n = len(pts)
+        if n < 2:
+            return
+
+        seg_indices = list(range(n - 1))
+        if closed and n > 1:
+            seg_indices.append(n - 1)
+
+        for seg in seg_indices:
+            p1 = pts[seg]
+            p2 = pts[(seg + 1) % n]
+            r  = trace.get_tr(seg)
+
+            if r is not None:
+                world_pts  = arc_points(p1.x, p1.y, p2.x, p2.y, r)
+                screen_pts = []
+                for wx, wy in world_pts:
+                    screen_pts.extend([self._sx(wx), self._sy(wy)])
+                if len(screen_pts) >= 4:
+                    kwargs = dict(fill=color, width=2, smooth=False)
+                    if dash:
+                        kwargs["dash"] = dash
+                    self.canvas.create_line(*screen_pts, **kwargs)
+            else:
+                kwargs = dict(fill=color, width=1)
+                if dash:
+                    kwargs["dash"] = dash
+                self.canvas.create_line(
+                    self._sx(p1.x), self._sy(p1.y),
+                    self._sx(p2.x), self._sy(p2.y),
+                    **kwargs)
+
+    # ============================================================
+    # XY / Trace table population
+    # ============================================================
+
+    def refresh_xy_table(self):
+        self.xy_table.delete(*self.xy_table.get_children())
+
+        shape = self.get_current_shape()
+        if not shape or not shape.trace:
+            return
+
+        trace = shape.trace
+        trace._sync_tr()
+
+        if trace.kind == "S":
+            sub = getattr(trace, "sub", None)
+            if sub == "moulding" and self.table_mode == self.MODE_TRACES:
+                self._populate_trace_table(trace)
+                return
+            self._populate_special_table(trace, shape)
+            return
+
+        if self.table_mode == self.MODE_POINTS:
+            self._populate_point_table(trace)
+        else:
+            self._populate_trace_table(trace)
+
+    def _populate_special_table(self, trace, shape=None):
+        sub = getattr(trace, "sub", "?")
+
+        if sub == "circle":
+            if trace.points:
+                p = trace.points[0]
+                r = trace.get_tr(0)
+            else:
+                p = None
+                r = getattr(trace, "_pending_radius", None)
+
+            r_display = round(abs(r), 3) if r is not None else "?"
+            x_display = round(p.x, 3)   if p else "—"
+            y_display = round(p.y, 3)   if p else "—"
+
+            self.xy_table.insert("", "end", iid="0",
+                values=("Centre", x_display, y_display, r_display))
+
+            if shape is not None:
+                wf      = getattr(shape, "workflow", None) or "—"
+                off     = getattr(shape, "offset",   None)
+                off_str = f"{off:+.3f}" if off is not None else "—"
+                self.xy_table.insert("", "end", iid="wf",
+                    values=("Workflow",
+                            wf.replace("_", " "),
+                            "Offset",
+                            off_str))
+
+        elif sub == "drill":
+            if trace.points:
+                p = trace.points[0]
+                self.xy_table.insert("", "end", iid="0",
+                    values=("Drill",
+                            round(p.x, 3), round(p.y, 3), "—"))
+            else:
+                self.xy_table.insert("", "end", iid="0",
+                    values=("Drill", "—", "—", "—"))
+
+        elif sub == "bulge":
+            for i, p in enumerate(trace.points):
+                self.xy_table.insert("", "end", iid=str(i),
+                    values=(f"P{i}",
+                            round(p.x, 3), round(p.y, 3), "bulge"))
+
+        elif sub == "moulding":
+            for i, p in enumerate(trace.points):
+                self.xy_table.insert("", "end", iid=str(i),
+                    values=(f"P{i}",
+                            round(p.x, 3), round(p.y, 3), ""))
+
+    def _populate_point_table(self, trace):
+        for i, p in enumerate(trace.points):
+            self.xy_table.insert(
+                "", "end", iid=str(i),
+                values=(f"P{i}", round(p.x, 3), round(p.y, 3), ""))
+
+    def _populate_trace_table(self, trace):
+        pts = trace.points
+        n   = len(pts)
+        if n < 2:
+            return
+
+        for seg in range(trace.num_segments):
+            p_from = seg
+            p_to   = (seg + 1) % n
+            r      = trace.get_tr(seg)
+
+            if r is not None:
+                abs_r = abs(r)
+                p1    = pts[p_from]
+                p2    = pts[p_to]
+                c     = chord_length(p1, p2)
+                h     = c / 2.0
+                if abs_r >= h:
+                    sagitta  = abs_r - math.sqrt(
+                        abs_r*abs_r - h*h)
+                    apex_str = str(round(sagitta, 4))
+                else:
+                    apex_str = ""
+            else:
+                apex_str = ""
+
+            tag = "open_seg" if not trace.closed else ""
+            self.xy_table.insert(
+                "", "end", iid=str(seg),
+                values=(f"tr{seg}",
+                        f"P{p_from}", f"P{p_to}", apex_str),
+                tags=(tag,))
+
+        self.xy_table.tag_configure(
+            "open_seg", foreground="#999999")
+
+    def update_xy_table(self):
+        self.refresh_xy_table()
+        if self.selected_point_index is None:
+            return
+        rows = self.xy_table.get_children()
+        if not rows:
+            return
+        idx = self.selected_point_index
+        if 0 <= idx < len(rows):
+            row_id = rows[idx]
+            self.xy_table.selection_set(row_id)
+            self.xy_table.see(row_id)
+
+    # ============================================================
+    # Redraw
+    # ============================================================
+
+    def redraw(self):
+        self.canvas.delete("all")
+        if self.show_grid:
+            self.draw_grid()
+
+        for si, shape in enumerate(self.state.shapes):
+            trace = getattr(shape, "trace", None)
+            if trace is None or not trace.points:
+                continue
+
+            pts   = trace.points
+            color = "blue" if si == self.current_shape_index else "black"
+
+            if trace.kind == "S":
+                sub = getattr(trace, "sub", None)
+
+                if sub == "circle" and len(pts) >= 1:
+                    cx      = self._sx(pts[0].x)
+                    cy      = self._sy(pts[0].y)
+                    r_world = trace.get_tr(0)
+                    if r_world is not None:
+                        r_px = abs(r_world) * self.view_scale
+                        self.canvas.create_oval(
+                            cx - r_px, cy - r_px,
+                            cx + r_px, cy + r_px,
+                            outline="purple", width=2)
+                        self.canvas.create_text(
+                            cx + 6, cy - 10,
+                            text=f"r={round(abs(r_world), 2)}",
+                            anchor="w", fill="purple",
+                            font=("Segoe UI", 8))
+                        off = getattr(shape, "offset", None)
+                        if off is not None:
+                            r_off_px = (abs(r_world) + off) \
+                                       * self.view_scale
+                            if r_off_px > 0:
+                                self.canvas.create_oval(
+                                    cx - r_off_px, cy - r_off_px,
+                                    cx + r_off_px, cy + r_off_px,
+                                    outline="#cc6600",
+                                    width=1, dash=(4, 3))
+                    self.canvas.create_oval(
+                        cx-4, cy-4, cx+4, cy+4, fill="purple")
+                    wf = getattr(shape, "workflow", None)
+                    if wf:
+                        self.canvas.create_text(
+                            cx + 6, cy + 8,
+                            text=wf.replace("_", " "),
+                            anchor="w", fill="#884400",
+                            font=("Segoe UI", 7))
+                    continue
+
+                if sub == "drill" and len(pts) >= 1:
+                    cx = self._sx(pts[0].x)
+                    cy = self._sy(pts[0].y)
+                    sz = 8
+                    self.canvas.create_line(
+                        cx-sz, cy, cx+sz, cy,
+                        fill="green", width=2)
+                    self.canvas.create_line(
+                        cx, cy-sz, cx, cy+sz,
+                        fill="green", width=2)
+                    self.canvas.create_oval(
+                        cx-3, cy-3, cx+3, cy+3, fill="green")
+                    continue
+
+                if sub == "bulge":
+                    self._draw_trace_segments(
+                        pts, trace, "magenta",
+                        closed=trace.closed, dash=(6, 3))
+                    for p in pts:
+                        sx, sy = self._sx(p.x), self._sy(p.y)
+                        self.canvas.create_oval(
+                            sx-3, sy-3, sx+3, sy+3,
+                            fill="magenta")
+                    continue
+
+                if sub == "moulding":
+                    self._draw_trace_segments(
+                        pts, trace, "orange", closed=False)
+                    for p in pts:
+                        sx, sy = self._sx(p.x), self._sy(p.y)
+                        self.canvas.create_oval(
+                            sx-3, sy-3, sx+3, sy+3,
+                            fill="orange")
+                    continue
+
+            if trace.kind == "T":
+                self._draw_trace_segments(
+                    pts, trace, "teal",
+                    closed=trace.closed, dash=(4, 3))
+                for p in pts:
+                    sx, sy = self._sx(p.x), self._sy(p.y)
+                    self.canvas.create_oval(
+                        sx-3, sy-3, sx+3, sy+3, fill="teal")
+                continue
+
+            # Standard R / B traces
+            self._draw_trace_segments(
+                pts, trace, color, closed=trace.closed)
+
+            for p in pts:
+                sx, sy = self._sx(p.x), self._sy(p.y)
+                self.canvas.create_oval(
+                    sx-3, sy-3, sx+3, sy+3, fill=color)
+
+        # Selected point highlight
+        cur_shape = self.get_current_shape()
+        cur_trace = getattr(cur_shape, "trace", None)
+
+        if cur_trace and self.selected_point_index is not None:
+            idx = self.selected_point_index
+            if 0 <= idx < len(cur_trace.points):
+                p      = cur_trace.points[idx]
+                sx, sy = self._sx(p.x), self._sy(p.y)
+                self.canvas.create_oval(
+                    sx-6, sy-6, sx+6, sy+6,
+                    outline="red", width=2)
+
+        # First-point marker
+        if cur_trace and cur_trace.points:
+            p      = cur_trace.points[0]
+            sx, sy = self._sx(p.x), self._sy(p.y)
+            self.canvas.create_oval(
+                sx-6, sy-6, sx+6, sy+6,
+                outline="cyan", width=2)
+
+        # NC toolpath overlay
+        if self.show_toolpath and self.toolpath_points:
+            self.draw_nc_toolpath()
+            self.draw_nc_legend()
+
+        self.draw_alert(self.canvas)
 
 
 # ------------------------------------------------------------
