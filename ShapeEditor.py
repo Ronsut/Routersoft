@@ -107,10 +107,10 @@ class Point:
 
 class Trace:
     def __init__(self, kind, points=None, closed=False, tid=None, sub=None):
-        self.id     = tid or str(uuid.uuid4())
-        self.kind   = kind
-        self.closed = bool(closed)
-        self.sub    = sub
+        self.id              = tid or str(uuid.uuid4())
+        self.kind            = kind
+        self.closed          = bool(closed)
+        self.sub             = sub
         self._pending_radius = None
 
         if points is None:
@@ -160,6 +160,7 @@ class Trace:
         if not (0 <= seg_index < len(self.tr)):
             return
 
+        # Early-out for explicit clear
         if value is None:
             self.tr[seg_index] = None
             return
@@ -185,8 +186,8 @@ class Trace:
             self.tr[seg_index] = None
             return
 
-        flip = _kind_flips_arc(self.kind)
-        self.tr[seg_index] = sagitta_to_radius(s, p1, p2, flip=flip)
+        # Convert signed sagitta → signed radius and store
+        self.tr[seg_index] = sagitta_to_radius(s, p1, p2)
 
     @property
     def num_segments(self):
@@ -234,55 +235,100 @@ def point_to_segment_distance(px, py, x1, y1, x2, y2):
     t = ((px - x1)*(x2 - x1) + (py - y1)*(y2 - y1)) / \
         ((x2 - x1)**2 + (y2 - y1)**2)
     t = max(0, min(1, t))
-    return dist(px, py, x1 + t*(x2-x1), y1 + t*(y2-y1))
+    return dist(px, py, x1 + t*(x2 - x1), y1 + t*(y2 - y1))
 
 
 def chord_length(p1: Point, p2: Point) -> float:
     return dist(p1.x, p1.y, p2.x, p2.y)
+
 
 def sagitta_valid_for_segment(sagitta: float, p1: Point, p2: Point) -> bool:
     if sagitta is None or sagitta == 0:
         return False
     return chord_length(p1, p2) > 1e-9
 
-def sagitta_to_radius(sagitta: float, p1: Point, p2: Point,
-                      flip: bool = False) -> float:
-    c = chord_length(p1, p2)
-    h = c / 2.0
-    s = abs(float(sagitta))
-    r = (h * h + s * s) / (2.0 * s)
-    if sagitta < 0:
-        r = -r
-    return -r if flip else r
 
+def sagitta_to_radius(sagitta: float, p1: Point, p2: Point) -> float:
+    """
+    Convert a signed sagitta to a signed radius.
 
-def _kind_flips_arc(kind: str) -> bool:
-    return kind in ("S", "B", "R")
+    Sign convention (direction-independent):
+      +sagitta  →  arc bulges LEFT  of the directed chord P1→P2
+      -sagitta  →  arc bulges RIGHT of the directed chord P1→P2
+
+    The returned radius carries the same sign and is passed
+    directly to arc_points(), which uses the sign to select
+    which side of the chord the centre sits on.
+    """
+    c   = chord_length(p1, p2)
+    h   = c / 2.0
+    s   = abs(float(sagitta))
+    r   = (h * h + s * s) / (2.0 * s)
+    return r if sagitta > 0 else -r
+
 
 def radius_valid_for_segment(radius: float, p1: Point, p2: Point) -> bool:
     return radius is not None and radius != 0
 
 
 def arc_points(x1, y1, x2, y2, radius, steps=20):
-    cx_mid = (x1 + x2) / 2.0
-    cy_mid = (y1 + y2) / 2.0
+    """
+    Generate polyline points along a circular arc from (x1,y1) to (x2,y2).
+
+    Sign contract
+    ─────────────
+    radius > 0  →  centre is to the LEFT  of the directed chord (x1,y1)→(x2,y2)
+    radius < 0  →  centre is to the RIGHT of the directed chord
+
+    How LEFT/RIGHT is determined
+    ────────────────────────────
+    Standing at (x1,y1) facing (x2,y2):
+      • dx = x2-x1,  dy = y2-y1
+      • The perpendicular-LEFT unit vector is  (-dy, dx) / |chord|
+      • The centre offset from the midpoint is  ± h  along that vector,
+        where h = sqrt(r² - (chord/2)²)
+      • sign(radius) selects the side:  +1 → left,  -1 → right
+
+    Degenerate cases
+    ────────────────
+    If |radius| < half the chord length the geometry is impossible;
+    the function falls back to a straight two-point segment.
+    If the two endpoints are coincident the chord has zero length;
+    the function also falls back to a two-point segment.
+    """
     dx     = x2 - x1
     dy     = y2 - y1
-    half_c = math.sqrt(dx*dx + dy*dy) / 2.0
-    abs_r  = abs(radius)
+    length = math.sqrt(dx * dx + dy * dy)
 
-    if half_c < 1e-9 or abs_r < half_c:
+    # Coincident endpoints — nothing to draw
+    if length < 1e-9:
         return [(x1, y1), (x2, y2)]
 
-    h      = math.sqrt(abs_r * abs_r - half_c * half_c)
-    length = math.sqrt(dx*dx + dy*dy)
+    half_c = length / 2.0
+    abs_r  = abs(radius)
+
+    # Radius too small to span the chord — fall back to straight line
+    if abs_r < half_c - 1e-9:
+        return [(x1, y1), (x2, y2)]
+
+    # Distance from midpoint to centre along the perpendicular
+    # Clamp to avoid sqrt of a tiny negative from floating-point error
+    h = math.sqrt(max(0.0, abs_r * abs_r - half_c * half_c))
+
+    # Midpoint of chord
+    mx = (x1 + x2) / 2.0
+    my = (y1 + y2) / 2.0
+
+    # Unit vector perpendicular-LEFT of the directed chord
     perp_x = -dy / length
     perp_y =  dx / length
 
+    # Place centre on the correct side
     side = 1.0 if radius > 0 else -1.0
-    ocx  = cx_mid + side * h * perp_x
-    ocy  = cy_mid + side * h * perp_y
+    ocx  = mx + side * h * perp_x
+    ocy  = my + side * h * perp_y
 
+    # Angular sweep — always take the shorter arc
     a_start = math.atan2(y1 - ocy, x1 - ocx)
     a_end   = math.atan2(y2 - ocy, x2 - ocx)
 
@@ -290,13 +336,11 @@ def arc_points(x1, y1, x2, y2, radius, steps=20):
     while diff >  math.pi: diff -= 2 * math.pi
     while diff < -math.pi: diff += 2 * math.pi
 
-    pts = []
-    for i in range(steps + 1):
-        t = i / steps
-        a = a_start + t * diff
-        pts.append((ocx + abs_r * math.cos(a),
-                    ocy + abs_r * math.sin(a)))
-    return pts
+    return [
+        (ocx + abs_r * math.cos(a_start + (i / steps) * diff),
+         ocy + abs_r * math.sin(a_start + (i / steps) * diff))
+        for i in range(steps + 1)
+    ]
 
 
 # ------------------------------------------------------------
@@ -322,9 +366,14 @@ def hit_test_shape(state: EditorState, x: float, y: float, threshold=3):
         if trace is None:
             continue
         pts = trace.points
-        for i in range(len(pts) - 1):
-            d = point_to_segment_distance(x, y,
-                    pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y)
+        n   = len(pts)
+        # Check all segments including the closing segment for closed traces
+        seg_count = n if trace.closed else n - 1
+        for i in range(seg_count):
+            p1 = pts[i]
+            p2 = pts[(i + 1) % n]
+            d  = point_to_segment_distance(x, y,
+                     p1.x, p1.y, p2.x, p2.y)
             if d < best_dist and d <= threshold:
                 best_dist  = d
                 best_shape = shape.id
@@ -436,7 +485,8 @@ class MachineSettingsPopup(tk.Toplevel):
             entry.insert(0, str(value))
             self.entries[key] = entry
 
-        ttk.Button(self, text="Save", command=self.save_settings).grid(
+        ttk.Button(self, text="Save",
+                   command=self.save_settings).grid(
             row=len(fields), column=0, columnspan=2, pady=10)
 
     def save_settings(self):
@@ -453,6 +503,7 @@ class MachineSettingsPopup(tk.Toplevel):
             except ValueError:
                 machine[key] = text
 
+        # Write to self.job_path consistently
         with open(self.job_path, "w") as f:
             json.dump({"shape": self.shape_data, "machine": machine},
                       f, indent=4)
@@ -791,7 +842,7 @@ class ShapeEditor:
 
         # NC toolpath state
         self.show_toolpath   = False
-        self.toolpath_points = []   # list of (x, y, is_rapid)
+        self.toolpath_points = []
 
         self.trace_type_var   = tk.StringVar(value="")
         self.angle_var        = tk.DoubleVar(value=90.0)
@@ -1056,7 +1107,7 @@ class ShapeEditor:
             return None, None
         xs = [p.x for p in trace.points]
         ys = [p.y for p in trace.points]
-        return sum(xs)/len(xs), sum(ys)/len(ys)
+        return sum(xs) / len(xs), sum(ys) / len(ys)
 
     def rotate_shape(self, shape, angle_degrees):
         cx, cy = self.get_shape_centroid(shape)
@@ -1066,8 +1117,8 @@ class ShapeEditor:
         cos_a, sin_a = math.cos(angle), math.sin(angle)
         for p in shape.trace.points:
             dx, dy = p.x - cx, p.y - cy
-            p.x = cx + dx*cos_a - dy*sin_a
-            p.y = cy + dx*sin_a + dy*cos_a
+            p.x = cx + dx * cos_a - dy * sin_a
+            p.y = cy + dx * sin_a + dy * cos_a
 
     def can_merge(self, shape1, shape2):
         if shape1.role != shape2.role:
@@ -1207,10 +1258,14 @@ class ShapeEditor:
             if trace is None or len(trace.points) < 2:
                 continue
             pts = trace.points
-            for i in range(len(pts) - 1):
-                d = point_to_segment_distance(
-                    wx, wy,
-                    pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y)
+            n   = len(pts)
+            # Include closing segment for closed traces
+            seg_count = n if trace.closed else n - 1
+            for i in range(seg_count):
+                p1 = pts[i]
+                p2 = pts[(i + 1) % n]
+                d  = point_to_segment_distance(
+                    wx, wy, p1.x, p1.y, p2.x, p2.y)
                 if d <= thr:
                     return shape.id
         return None
@@ -1437,7 +1492,7 @@ class ShapeEditor:
         factor = 1.1 if event.delta > 0 else 0.9
         wx = self._wx(event.x)
         wy = self._wy(event.y)
-        self.view_scale *= factor
+        self.view_scale    *= factor
         self.view_offset_x += event.x - \
             (wx * self.view_scale + self.view_offset_x)
         self.view_offset_y += (self.canvas_height - event.y) - \
@@ -2246,9 +2301,9 @@ class ShapeEditor:
                     cx, cy = nx, ny
 
                 elif modal in (2, 3):
-                    i_off    = get_val(tokens, "I", 0.0)
-                    j_off    = get_val(tokens, "J", 0.0)
-                    arc_pts  = self._arc_move_points(
+                    i_off   = get_val(tokens, "I", 0.0)
+                    j_off   = get_val(tokens, "J", 0.0)
+                    arc_pts = self._arc_move_points(
                         cx, cy, nx, ny, i_off, j_off,
                         clockwise=(modal == 2))
                     for px, py in arc_pts:
@@ -2297,7 +2352,6 @@ class ShapeEditor:
         if not pts:
             return
 
-        # Start marker
         sx0 = self._sx(pts[0][0])
         sy0 = self._sy(pts[0][1])
         self.canvas.create_oval(sx0-6, sy0-6, sx0+6, sy0+6,
@@ -2329,7 +2383,6 @@ class ShapeEditor:
 
             prev_x, prev_y = nx, ny
 
-        # End marker
         sxe = self._sx(prev_x)
         sye = self._sy(prev_y)
         self.canvas.create_oval(sxe-5, sye-5, sxe+5, sye+5,
@@ -2538,15 +2591,22 @@ class ShapeEditor:
                 values=(f"P{i}", round(p.x, 3), round(p.y, 3), ""))
 
     def _populate_trace_table(self, trace):
+        """
+        Populate the Traces table.
+        Each row shows:  tr<n>  |  P<from>  |  P<to>  |  apex (signed sagitta)
+        The apex column is editable — the user enters a signed sagitta and
+        set_tr() converts it to a signed radius for arc_points().
+        """
         pts = trace.points
         n   = len(pts)
         if n < 2:
             return
 
         for seg in range(trace.num_segments):
-            p_from = seg
-            p_to   = (seg + 1) % n
-            r      = trace.get_tr(seg)
+            p_from   = seg
+            p_to     = (seg + 1) % n
+            r        = trace.get_tr(seg)
+            apex_str = ""
 
             if r is not None:
                 abs_r = abs(r)
@@ -2555,23 +2615,19 @@ class ShapeEditor:
                 c     = chord_length(p1, p2)
                 h     = c / 2.0
                 if abs_r >= h:
-                    sagitta  = abs_r - math.sqrt(
-                        abs_r*abs_r - h*h)
-                    apex_str = str(round(sagitta, 4))
-                else:
-                    apex_str = ""
-            else:
-                apex_str = ""
+                    sagitta_mag    = abs_r - math.sqrt(
+                                         max(0.0, abs_r**2 - h**2))
+                    # Restore sign: positive r → left bulge → positive sagitta
+                    signed_sagitta = sagitta_mag if r > 0 else -sagitta_mag
+                    apex_str       = str(round(signed_sagitta, 4))
 
-            tag = "open_seg" if not trace.closed else ""
+            tag = "" if trace.closed else "open_seg"
             self.xy_table.insert(
                 "", "end", iid=str(seg),
-                values=(f"tr{seg}",
-                        f"P{p_from}", f"P{p_to}", apex_str),
+                values=(f"tr{seg}", f"P{p_from}", f"P{p_to}", apex_str),
                 tags=(tag,))
 
-        self.xy_table.tag_configure(
-            "open_seg", foreground="#999999")
+        self.xy_table.tag_configure("open_seg", foreground="#999999")
 
     def update_xy_table(self):
         self.refresh_xy_table()
