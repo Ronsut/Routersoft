@@ -1,5 +1,9 @@
 ## ShapeEditor — User Guide1. 
 
+
+<img width="1920" height="982" alt="Editor" src="https://github.com/user-attachments/assets/36a43f13-f582-4c79-9f11-7f7669a23e0c" />
+
+
 ### What Is ShapeEditor?
 
 ShapeEditor is a CNC geometry tool for creating, editing, and organising shapes that output clean G-code for grblHAL-based controllers (e.g. the RP23CNC).You can:
