@@ -6,7 +6,7 @@ in a libaray folder
 
 ### What Is ShapeEditor?
 
-ShapeEditor aims to simplify offsite flat pack production of cabinates for rapid onsite installaion by joiners, shop fitters and DIY builders. Users can create their individual components in a libaray folder such a pockets for soft close hinges, mouldings etc, and use them in their current project.  ShapeEditor is a CNC geometry tool for creating, editing, and organising shapes that output clean G-code for grblHAL-based controllers (e.g. the RP23CNC).
+ShapeEditor aims to simplify offsite flat pack production of cabinates for rapid onsite installaion by joiners, shop fitters and DIY builders. Users can create their individual components in a library folder such a pockets for soft close hinges, mouldings etc, and use them in their current project.  ShapeEditor is a CNC geometry tool for creating, editing, and organising shapes that output clean G-code for grblHAL-based controllers (e.g. the RP23CNC).
 
 You can:
 
